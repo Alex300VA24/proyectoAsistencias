@@ -28,15 +28,26 @@ function initDatabase(callback) {
             )
         `);
 
-        // Tabla de docentes (modificada con foreign key a cursos)
+        // Tabla de docentes (sin foreign key a cursos, relación many-to-many)
         db.run(`
             CREATE TABLE IF NOT EXISTS docentes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 dni TEXT UNIQUE NOT NULL,
                 nombre TEXT NOT NULL,
-                curso_id INTEGER,
+                creado_en DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // Tabla de relación many-to-many entre docentes y cursos
+        db.run(`
+            CREATE TABLE IF NOT EXISTS docente_cursos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                docente_id INTEGER NOT NULL,
+                curso_id INTEGER NOT NULL,
                 creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (curso_id) REFERENCES cursos(id)
+                UNIQUE(docente_id, curso_id),
+                FOREIGN KEY (docente_id) REFERENCES docentes(id) ON DELETE CASCADE,
+                FOREIGN KEY (curso_id) REFERENCES cursos(id) ON DELETE CASCADE
             )
         `);
 
@@ -69,10 +80,26 @@ function initDatabase(callback) {
                 FOREIGN KEY (docente_dni) REFERENCES docentes(dni),
                 FOREIGN KEY (curso_id) REFERENCES cursos(id)
             )
+        `);
+
+        // Tabla de administradores
+        db.run(`
+            CREATE TABLE IF NOT EXISTS admins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL
+            )
         `, (err) => {
             if (err) {
                 console.error('Error al crear tablas:', err);
             } else {
+                // Insertar admin por defecto si no existe
+                db.get("SELECT * FROM admins WHERE usuario = 'admin'", (err, row) => {
+                    if (!row) {
+                        db.run("INSERT INTO admins (usuario, password) VALUES (?, ?)", ['admin', 'admin123']);
+                        console.log('✅ Usuario admin creado por defecto (admin/admin123)');
+                    }
+                });
                 console.log('✅ Esquema de base de datos inicializado');
             }
             if (callback) callback(err);
@@ -83,44 +110,97 @@ function initDatabase(callback) {
 // DOCENTES
 function obtenerDocentes(callback) {
     db.all(`
-        SELECT d.id, d.dni, d.nombre, d.curso_id, c.nombre as curso_nombre, c.hora_inicio, c.hora_fin, c.dia
+        SELECT DISTINCT d.id, d.dni, d.nombre
         FROM docentes d
-        LEFT JOIN cursos c ON d.curso_id = c.id
-    `, [], (err, rows) => {
+        ORDER BY d.nombre
+    `, [], (err, docentes) => {
         if (err) return callback(err);
-        callback(null, rows || []);
+        
+        // Obtener cursos para cada docente
+        let docentesConCursos = [];
+        let procesados = 0;
+        
+        if (docentes.length === 0) {
+            return callback(null, []);
+        }
+        
+        docentes.forEach(docente => {
+            db.all(`
+                SELECT c.id, c.nombre, c.hora_inicio, c.hora_fin, c.dia
+                FROM cursos c
+                INNER JOIN docente_cursos dc ON c.id = dc.curso_id
+                WHERE dc.docente_id = ?
+                ORDER BY c.dia, c.hora_inicio
+            `, [docente.id], (err, cursos) => {
+                docentesConCursos.push({
+                    ...docente,
+                    cursos: cursos || []
+                });
+                procesados++;
+                
+                if (procesados === docentes.length) {
+                    callback(null, docentesConCursos);
+                }
+            });
+        });
     });
 }
 
 function obtenerDocentePorDNI(dni, callback) {
     db.get(`
-        SELECT d.id, d.dni, d.nombre, d.curso_id, c.nombre as curso_nombre, c.hora_inicio, c.hora_fin, c.dia
-        FROM docentes d
-        LEFT JOIN cursos c ON d.curso_id = c.id
-        WHERE d.dni = ?
-    `, [dni], (err, row) => {
+        SELECT id, dni, nombre
+        FROM docentes
+        WHERE dni = ?
+    `, [dni], (err, docente) => {
         if (err) return callback(err);
-        callback(null, row || null);
+        if (!docente) return callback(null, null);
+        
+        db.all(`
+            SELECT c.id, c.nombre, c.hora_inicio, c.hora_fin, c.dia
+            FROM cursos c
+            INNER JOIN docente_cursos dc ON c.id = dc.curso_id
+            WHERE dc.docente_id = ?
+            ORDER BY c.dia, c.hora_inicio
+        `, [docente.id], (err, cursos) => {
+            if (err) return callback(err);
+            callback(null, {
+                ...docente,
+                cursos: cursos || []
+            });
+        });
     });
 }
 
 function obtenerDocentePorId(id, callback) {
     db.get(`
-        SELECT d.id, d.dni, d.nombre, d.curso_id, c.nombre as curso_nombre, c.hora_inicio, c.hora_fin, c.dia
-        FROM docentes d
-        LEFT JOIN cursos c ON d.curso_id = c.id
-        WHERE d.id = ?
-    `, [id], (err, row) => {
+        SELECT id, dni, nombre
+        FROM docentes
+        WHERE id = ?
+    `, [id], (err, docente) => {
         if (err) return callback(err);
-        callback(null, row || null);
+        if (!docente) return callback(null, null);
+        
+        db.all(`
+            SELECT c.id, c.nombre, c.hora_inicio, c.hora_fin, c.dia
+            FROM cursos c
+            INNER JOIN docente_cursos dc ON c.id = dc.curso_id
+            WHERE dc.docente_id = ?
+            ORDER BY c.dia, c.hora_inicio
+        `, [docente.id], (err, cursos) => {
+            if (err) return callback(err);
+            callback(null, {
+                ...docente,
+                cursos: cursos || []
+            });
+        });
     });
 }
 
 function crearDocente(docente, callback) {
-    const { dni, nombre, curso_id } = docente;
+    const { dni, nombre } = docente;
     db.run(
-        'INSERT INTO docentes (dni, nombre, curso_id) VALUES (?, ?, ?)',
-        [dni, nombre, curso_id || null],
+        'INSERT INTO docentes (dni, nombre) VALUES (?, ?)',
+        [dni, nombre],
         function(err) {
             if (err) return callback(err);
             obtenerDocentePorId(this.lastID, callback);
@@ -129,10 +209,10 @@ function crearDocente(docente, callback) {
 }
 
 function actualizarDocente(id, docente, callback) {
-    const { nombre, curso_id } = docente;
+    const { nombre } = docente;
     db.run(
-        'UPDATE docentes SET nombre = ?, curso_id = ? WHERE id = ?',
-        [nombre, curso_id || null, id],
+        'UPDATE docentes SET nombre = ? WHERE id = ?',
+        [nombre, id],
         function(err) {
             if (err) return callback(err);
             obtenerDocentePorId(id, callback);
@@ -142,6 +222,57 @@ function actualizarDocente(id, docente, callback) {
 
 function eliminarDocente(id, callback) {
     db.run('DELETE FROM docentes WHERE id = ?', [id], callback);
+}
+
+// Agregar curso a docente
+function asignarCursoDocente(docente_id, curso_id, callback) {
+    db.run(
+        'INSERT OR IGNORE INTO docente_cursos (docente_id, curso_id) VALUES (?, ?)',
+        [docente_id, curso_id],
+        function(err) {
+            if (err) return callback(err);
+            obtenerDocentePorId(docente_id, callback);
+        }
+    );
+}
+
+// Remover curso de docente
+function removerCursoDocente(docente_id, curso_id, callback) {
+    db.run(
+        'DELETE FROM docente_cursos WHERE docente_id = ? AND curso_id = ?',
+        [docente_id, curso_id],
+        function(err) {
+            if (err) return callback(err);
+            obtenerDocentePorId(docente_id, callback);
+        }
+    );
+}
+
+// Actualizar cursos de un docente (remplazo completo)
+function actualizarCursosDocente(docente_id, curso_ids, callback) {
+    db.run('DELETE FROM docente_cursos WHERE docente_id = ?', [docente_id], (err) => {
+        if (err) return callback(err);
+        
+        if (!curso_ids || curso_ids.length === 0) {
+            return obtenerDocentePorId(docente_id, callback);
+        }
+        
+        let insertados = 0;
+        curso_ids.forEach(curso_id => {
+            db.run(
+                'INSERT INTO docente_cursos (docente_id, curso_id) VALUES (?, ?)',
+                [docente_id, curso_id],
+                function(err) {
+                    if (err) console.error(err);
+                    insertados++;
+                    
+                    if (insertados === curso_ids.length) {
+                        obtenerDocentePorId(docente_id, callback);
+                    }
+                }
+            );
+        });
+    });
 }
 
 // JORNADAS ACTIVAS
@@ -247,6 +378,13 @@ function eliminarCurso(id, callback) {
     db.run('DELETE FROM cursos WHERE id = ?', [id], callback);
 }
 
+function verificarAdmin(usuario, password, callback) {
+    db.get('SELECT * FROM admins WHERE usuario = ? AND password = ?', [usuario, password], (err, row) => {
+        if (err) return callback(err);
+        callback(null, row);
+    });
+}
+
 module.exports = {
     db,
     obtenerDocentes,
@@ -255,6 +393,9 @@ module.exports = {
     crearDocente,
     actualizarDocente,
     eliminarDocente,
+    asignarCursoDocente,
+    removerCursoDocente,
+    actualizarCursosDocente,
     obtenerJornadaActiva,
     crearJornadaActiva,
     eliminarJornadaActiva,
@@ -266,5 +407,6 @@ module.exports = {
     obtenerCursoPorId,
     crearCurso,
     actualizarCurso,
-    eliminarCurso
+    eliminarCurso,
+    verificarAdmin
 };

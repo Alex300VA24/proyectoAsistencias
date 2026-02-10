@@ -10,6 +10,11 @@ document.addEventListener('DOMContentLoaded', () => {
     cargarCursosEnSelect();
 });
 
+function cerrarSesion() {
+    localStorage.removeItem('adminToken');
+    window.location.href = 'index.html';
+}
+
 // ==================== FUNCIONES DE PESTAÑAS ====================
 
 function cambiarTab(tab) {
@@ -23,7 +28,12 @@ function cambiarTab(tab) {
 
     // Mostrar tab seleccionado
     document.getElementById(tab + '-tab').classList.add('active');
-    event.target.classList.add('active');
+    // Si el evento fue click, activamos el botón
+    if (event && event.target) {
+        // Buscar el botón si el click fue en el icono
+        const btn = event.target.closest('.admin-tab-btn');
+        if(btn) btn.classList.add('active');
+    }
 }
 
 // ==================== FUNCIONES DE DOCENTES ====================
@@ -38,21 +48,25 @@ async function cargarDocentes() {
         tbody.innerHTML = '';
 
         if (docentes.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fas fa-inbox"></i><p>No hay docentes registrados</p></td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fas fa-inbox"></i><p>No hay docentes registrados</p></td></tr>';
             return;
         }
 
         docentes.forEach(docente => {
             const tr = document.createElement('tr');
-            const horario = docente.curso_nombre
-                ? `${docente.curso_nombre} (${docente.hora_inicio} - ${docente.hora_fin})`
-                : 'Sin asignar';
+            
+            // Crear lista de cursos
+            let cursosHTML = '-';
+            if (docente.cursos && docente.cursos.length > 0) {
+                cursosHTML = docente.cursos
+                    .map(c => `${c.nombre} (${c.dia} ${c.hora_inicio}-${c.hora_fin})`)
+                    .join('<br>');
+            }
 
             tr.innerHTML = `
                 <td>${docente.dni}</td>
                 <td>${docente.nombre}</td>
-                <td>${docente.curso_nombre || '-'}</td>
-                <td>${horario}</td>
+                <td>${cursosHTML}</td>
                 <td>
                     <div class="action-buttons">
                         <button class="btn-sm btn-edit" onclick="editarDocente(${docente.id})">
@@ -99,7 +113,15 @@ function editarDocente(id) {
             document.getElementById('docenteDNI').value = docente.dni;
             document.getElementById('docenteDNI').disabled = true;
             document.getElementById('docenteNombre').value = docente.nombre;
-            document.getElementById('docenteCursoId').value = docente.curso_id || '';
+            
+            // Seleccionar múltiples cursos
+            const select = document.getElementById('docenteCursosIds');
+            const cursosIds = (docente.cursos || []).map(c => c.id);
+            
+            Array.from(select.options).forEach(option => {
+                option.selected = cursosIds.includes(parseInt(option.value));
+            });
+            
             document.getElementById('modalDocenteTitle').textContent = 'Editar Docente';
             document.getElementById('modalDocente').classList.add('active');
         })
@@ -119,11 +141,14 @@ function guardarDocente(event) {
     const id = document.getElementById('docenteId').value;
     const dni = document.getElementById('docenteDNI').value;
     const nombre = document.getElementById('docenteNombre').value;
-    const curso_id = document.getElementById('docenteCursoId').value;
+    
+    // Obtener múltiples cursos seleccionados
+    const select = document.getElementById('docenteCursosIds');
+    const curso_ids = Array.from(select.selectedOptions).map(opt => parseInt(opt.value));
 
     const datos = {
         nombre,
-        curso_id: curso_id ? parseInt(curso_id) : null
+        curso_ids
     };
 
     if (!id) {
@@ -192,47 +217,39 @@ function guardarDocente(event) {
 
 function confirmarEliminarDocente(id, nombre) {
     Swal.fire({
-        title: '¿Eliminar docente?',
-        text: `¿Estás seguro de que deseas eliminar a "${nombre}"? Esta acción no se puede deshacer.`,
+        title: '¿Estás seguro?',
+        text: `Se eliminará al docente ${nombre} y todo su historial`,
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonColor: '#dc2626',
-        cancelButtonColor: '#64748b',
-        confirmButtonText: '<i class="fas fa-trash"></i> Sí, eliminar',
-        cancelButtonText: '<i class="fas fa-times"></i> Cancelar',
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar'
     }).then((result) => {
         if (result.isConfirmed) {
-            eliminarDocente(id);
+            fetch(`${API_URL}/docentes/${id}`, {
+                method: 'DELETE'
+            })
+                .then(res => {
+                    if (!res.ok) throw new Error('Error al eliminar');
+                    Swal.fire(
+                        '¡Eliminado!',
+                        'El docente ha sido eliminado.',
+                        'success'
+                    );
+                    cargarDocentes();
+                    cargarReportes();
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    Swal.fire(
+                        'Error',
+                        'No se pudo eliminar el docente',
+                        'error'
+                    );
+                });
         }
     });
-}
-
-function eliminarDocente(id) {
-    fetch(`${API_URL}/docentes/${id}`, {
-        method: 'DELETE'
-    })
-        .then(res => {
-            if (!res.ok) throw new Error('Error al eliminar docente');
-            return res.json();
-        })
-        .then(() => {
-            Swal.fire({
-                icon: 'success',
-                title: '¡Eliminado!',
-                text: 'El docente ha sido eliminado correctamente',
-                timer: 2000
-            });
-            cargarDocentes();
-            cargarReportes();
-        })
-        .catch(err => {
-            console.error('Error:', err);
-            Swal.fire({
-                icon: 'error',
-                title: 'Error',
-                text: 'No se pudo eliminar el docente',
-            });
-        });
 }
 
 // ==================== FUNCIONES DE CURSOS ====================
@@ -240,32 +257,34 @@ function eliminarDocente(id) {
 async function cargarCursos() {
     try {
         const response = await fetch(`${API_URL}/cursos`);
+
         if (!response.ok) throw new Error('Error al cargar cursos');
 
         const cursos = await response.json();
+        console.log("Este es cursos: ", cursos[0]);
+        console.log("Este es cursos.nombre: ", cursos[0].nombre);
         const tbody = document.getElementById('listaCursos');
         tbody.innerHTML = '';
 
         if (cursos.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><i class="fas fa-inbox"></i><p>No hay cursos registrados</p></td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fas fa-inbox"></i><p>No hay cursos registrados</p></td></tr>';
             return;
         }
-
+        
         cursos.forEach(curso => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td><strong>${curso.nombre}</strong></td>
+                <td>${curso.nombre}</td>
                 <td>${curso.dia}</td>
                 <td>${curso.hora_inicio}</td>
                 <td>${curso.hora_fin}</td>
-                <td>${curso.descripcion || '-'}</td>
                 <td>
                     <div class="action-buttons">
                         <button class="btn-sm btn-edit" onclick="editarCurso(${curso.id})">
-                            <i class="fas fa-edit"></i> Editar
+                            <i class="fas fa-edit"></i>
                         </button>
                         <button class="btn-sm btn-delete" onclick="confirmarEliminarCurso(${curso.id}, '${curso.nombre}')">
-                            <i class="fas fa-trash"></i> Eliminar
+                            <i class="fas fa-trash"></i>
                         </button>
                     </div>
                 </td>
@@ -274,11 +293,6 @@ async function cargarCursos() {
         });
     } catch (error) {
         console.error('Error:', error);
-        Swal.fire({
-            icon: 'error',
-            title: 'Error',
-            text: 'No se pudieron cargar los cursos',
-        });
     }
 }
 
@@ -286,23 +300,18 @@ async function cargarCursosEnSelect() {
     try {
         const response = await fetch(`${API_URL}/cursos`);
         if (!response.ok) throw new Error('Error al cargar cursos');
-
         const cursos = await response.json();
-        const select = document.getElementById('docenteCursoId');
-
-        // Limpiar opciones existentes (excepto la primera)
-        while (select.options.length > 1) {
-            select.remove(1);
-        }
-
+        const select = document.getElementById('docenteCursosIds');
+        select.innerHTML = '';
+        
         cursos.forEach(curso => {
             const option = document.createElement('option');
             option.value = curso.id;
-            option.textContent = `${curso.nombre} (${curso.hora_inicio} - ${curso.hora_fin})`;
+            option.textContent = `${curso.nombre} (${curso.dia} ${curso.hora_inicio}-${curso.hora_fin})`;
             select.appendChild(option);
         });
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error cargando cursos en select:', error);
     }
 }
 
@@ -330,6 +339,7 @@ function editarCurso(id) {
             document.getElementById('cursoHoraInicio').value = curso.hora_inicio;
             document.getElementById('cursoHoraFin').value = curso.hora_fin;
             document.getElementById('cursoDescripcion').value = curso.descripcion || '';
+            
             document.getElementById('modalCursoTitle').textContent = 'Editar Curso';
             document.getElementById('modalCurso').classList.add('active');
         })
@@ -347,128 +357,74 @@ function guardarCurso(event) {
     event.preventDefault();
 
     const id = document.getElementById('cursoId').value;
-    const nombre = document.getElementById('cursoNombre').value;
-    const dia = document.getElementById('cursoDia').value;
-    const hora_inicio = document.getElementById('cursoHoraInicio').value;
-    const hora_fin = document.getElementById('cursoHoraFin').value;
-    const descripcion = document.getElementById('cursoDescripcion').value;
-
     const datos = {
-        nombre,
-        dia,
-        hora_inicio,
-        hora_fin,
-        descripcion
+        nombre: document.getElementById('cursoNombre').value,
+        dia: document.getElementById('cursoDia').value,
+        hora_inicio: document.getElementById('cursoHoraInicio').value,
+        hora_fin: document.getElementById('cursoHoraFin').value,
+        descripcion: document.getElementById('cursoDescripcion').value
     };
 
-    if (!id) {
-        // Crear nuevo
-        fetch(`${API_URL}/cursos`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(datos)
-        })
-            .then(res => {
-                if (!res.ok) throw new Error('Error al crear curso');
-                return res.json();
-            })
-            .then(() => {
-                Swal.fire({
-                    icon: 'success',
-                    title: '¡Éxito!',
-                    text: 'Curso creado correctamente',
-                    timer: 2000
-                });
-                cerrarModalCurso();
-                cargarCursos();
-                cargarCursosEnSelect();
-            })
-            .catch(err => {
-                console.error('Error:', err);
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error',
-                    text: 'No se pudo crear el curso',
-                });
-            });
-    } else {
-        // Editar
-        fetch(`${API_URL}/cursos/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(datos)
-        })
-            .then(res => {
-                if (!res.ok) throw new Error('Error al actualizar curso');
-                return res.json();
-            })
-            .then(() => {
-                Swal.fire({
-                    icon: 'success',
-                    title: '¡Éxito!',
-                    text: 'Curso actualizado correctamente',
-                    timer: 2000
-                });
-                cerrarModalCurso();
-                cargarCursos();
-                cargarCursosEnSelect();
-                cargarDocentes();
-            })
-            .catch(err => {
-                console.error('Error:', err);
-                Swal.fire({
-                    icon: 'error',
-                    title: 'Error',
-                    text: 'No se pudo actualizar el curso',
-                });
-            });
-    }
-}
+    const url = id ? `${API_URL}/cursos/${id}` : `${API_URL}/cursos`;
+    const method = id ? 'PUT' : 'POST';
 
-function confirmarEliminarCurso(id, nombre) {
-    Swal.fire({
-        title: '¿Eliminar curso?',
-        text: `¿Estás seguro de que deseas eliminar "${nombre}"? Esta acción no se puede deshacer.`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonColor: '#dc2626',
-        cancelButtonColor: '#64748b',
-        confirmButtonText: '<i class="fas fa-trash"></i> Sí, eliminar',
-        cancelButtonText: '<i class="fas fa-times"></i> Cancelar',
-    }).then((result) => {
-        if (result.isConfirmed) {
-            eliminarCurso(id);
-        }
-    });
-}
-
-function eliminarCurso(id) {
-    fetch(`${API_URL}/cursos/${id}`, {
-        method: 'DELETE'
+    fetch(url, {
+        method: method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(datos)
     })
         .then(res => {
-            if (!res.ok) throw new Error('Error al eliminar curso');
+            if (!res.ok) throw new Error('Error al guardar curso');
             return res.json();
         })
         .then(() => {
             Swal.fire({
                 icon: 'success',
-                title: '¡Eliminado!',
-                text: 'El curso ha sido eliminado correctamente',
-                timer: 2000
+                title: '¡Éxito!',
+                text: 'Curso guardado correctamente',
+                timer: 1500
             });
+            cerrarModalCurso();
             cargarCursos();
-            cargarCursosEnSelect();
-            cargarDocentes();
+            cargarCursosEnSelect(); // Actualizar select de docentes
         })
         .catch(err => {
             console.error('Error:', err);
             Swal.fire({
                 icon: 'error',
                 title: 'Error',
-                text: 'No se pudo eliminar el curso',
+                text: 'No se pudo guardar el curso',
             });
         });
+}
+
+function confirmarEliminarCurso(id, nombre) {
+    Swal.fire({
+        title: '¿Estás seguro?',
+        text: `Se eliminará el curso ${nombre}`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            fetch(`${API_URL}/cursos/${id}`, {
+                method: 'DELETE'
+            })
+                .then(res => {
+                    if (!res.ok) throw new Error('Error al eliminar');
+                    Swal.fire('¡Eliminado!', 'El curso ha sido eliminado.', 'success');
+                    cargarCursos();
+                    cargarCursosEnSelect();
+                })
+                .catch(err => {
+                    console.error('Error:', err);
+                    Swal.fire('Error', 'No se pudo eliminar el curso', 'error');
+                });
+        }
+    });
 }
 
 // ==================== FUNCIONES DE REPORTES ====================
@@ -476,26 +432,25 @@ function eliminarCurso(id) {
 async function cargarReportes() {
     try {
         const response = await fetch(`${API_URL}/docentes`);
-        if (!response.ok) throw new Error('Error al cargar docentes');
+        if (!response.ok) throw new Error('Error al cargar docentes para reportes');
 
         const docentes = await response.json();
         const tbody = document.getElementById('listaReportes');
         tbody.innerHTML = '';
 
         if (docentes.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fas fa-inbox"></i><p>No hay docentes para descargar reportes</p></td></tr>';
+            tbody.innerHTML = '<tr><td colspan="3" class="empty-state"><i class="fas fa-inbox"></i><p>No hay datos para reportes</p></td></tr>';
             return;
         }
 
         docentes.forEach(docente => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${docente.nombre}</td>
                 <td>${docente.dni}</td>
-                <td>${docente.curso_nombre || 'Sin asignar'}</td>
+                <td>${docente.nombre}</td>
                 <td>
-                    <button class="btn-sm btn-primary" onclick="generarExcel('${docente.dni}', '${docente.nombre}')">
-                        <i class="fas fa-file-excel"></i> Descargar
+                    <button class="btn-sm btn-edit" onclick="generarExcel('${docente.dni}', '${docente.nombre}')">
+                        <i class="fas fa-file-excel"></i> Descargar Reporte
                     </button>
                 </td>
             `;
@@ -503,18 +458,19 @@ async function cargarReportes() {
         });
     } catch (error) {
         console.error('Error:', error);
-        Swal.fire({
-            icon: 'error',
-            title: 'Error',
-            text: 'No se pudieron cargar los docentes para reportes',
-        });
     }
 }
 
 async function generarExcel(dni, nombre) {
     try {
+        // Verificar si hay datos primero
+        /* 
+           Nota: La descarga directa via window.open no permite manejar errores 404 fácilmente.
+           Mejor hacemos un fetch blob o verificamos primero.
+        */
+        
         window.open(`${API_URL}/reportes/${dni}`, '_blank');
-
+        
         Swal.fire({
             icon: 'success',
             title: 'Descargando...',
@@ -522,6 +478,7 @@ async function generarExcel(dni, nombre) {
             timer: 2000,
             timerProgressBar: true
         });
+        
     } catch (error) {
         console.error('Error:', error);
         Swal.fire({
@@ -532,43 +489,15 @@ async function generarExcel(dni, nombre) {
     }
 }
 
-// Borrar todo el historial
-async function borrarHistorial() {
-    try {
-        const response = await fetch(`${API_URL}/asistencias`, {
-            method: 'DELETE'
+function borrarHistorial() {
+    // Implementar endpoint para borrar historial si es necesario
+    // Por ahora solo es un placeholder visual o requiere endpoint backend
+    fetch(`${API_URL}/asistencias`, { method: 'DELETE' }) // Asumiendo que existe este endpoint
+        .then(res => {
+            if(res.ok) {
+                 Swal.fire('Eliminado', 'Historial eliminado', 'success');
+            } else {
+                 Swal.fire('Error', 'No se pudo eliminar', 'error');
+            }
         });
-
-        if (!response.ok) {
-            throw new Error('Error al eliminar historial');
-        }
-
-        Swal.fire({
-            title: "¡Eliminado!",
-            text: "El historial ha sido eliminado correctamente.",
-            icon: "success",
-        }).then(() => {
-            location.reload();
-        });
-    } catch (error) {
-        console.error('Error:', error);
-        Swal.fire({
-            icon: 'error',
-            title: 'Error',
-            text: 'No se pudo eliminar el historial',
-        });
-    }
 }
-
-// Cerrar modales al hacer click fuera
-window.onclick = function(event) {
-    const modalDocente = document.getElementById('modalDocente');
-    const modalCurso = document.getElementById('modalCurso');
-
-    if (event.target === modalDocente) {
-        cerrarModalDocente();
-    }
-    if (event.target === modalCurso) {
-        cerrarModalCurso();
-    }
-};

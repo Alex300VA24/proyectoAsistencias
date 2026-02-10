@@ -17,6 +17,7 @@ const jornadasRoutes = require('./routes/jornadas');
 const asistenciasRoutes = require('./routes/asistencias');
 const reportesRoutes = require('./routes/reportes');
 const cursosRoutes = require('./routes/cursos');
+const authRoutes = require('./routes/auth');
 
 // Usar rutas
 app.use('/api/docentes', docentesRoutes);
@@ -24,6 +25,7 @@ app.use('/api/jornadas', jornadasRoutes);
 app.use('/api/asistencias', asistenciasRoutes);
 app.use('/api/reportes', reportesRoutes);
 app.use('/api/cursos', cursosRoutes);
+app.use('/api/auth', authRoutes);
 
 // Ruta raíz - redirigir a index.html
 app.get('/', (req, res) => {

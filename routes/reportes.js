@@ -71,12 +71,18 @@ router.get('/:dni', async (req, res) => {
                 // Información del curso asignado
                 worksheet.mergeCells('A5:H5');
                 const cursoRow = worksheet.getCell('A5');
-                const cursoInfo = docente.curso_nombre 
-                    ? `Curso: ${docente.curso_nombre} (${docente.hora_inicio} - ${docente.hora_fin}, ${docente.dia})`
-                    : 'Curso: Sin asignar';
+                let cursoInfo = 'Cursos asignados: ';
+                if (docente.cursos && docente.cursos.length > 0) {
+                    cursoInfo += docente.cursos
+                        .map(c => `${c.nombre} (${c.dia} ${c.hora_inicio}-${c.hora_fin})`)
+                        .join(', ');
+                } else {
+                    cursoInfo += 'Sin asignar';
+                }
                 cursoRow.value = cursoInfo;
                 cursoRow.font = { name: 'Arial', size: 11, color: { argb: 'FF4B5563' } };
-                cursoRow.alignment = { vertical: 'middle', horizontal: 'left' };
+                cursoRow.alignment = { vertical: 'middle', horizontal: 'left', wrapText: true };
+                worksheet.getRow(5).height = 25;
                 
                 // Fila vacía
                 worksheet.addRow([]);

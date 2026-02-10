@@ -36,5 +36,3 @@ const docentes = [
         ]
     }
 ];
-
-const DNI_ADMIN = "99999999";

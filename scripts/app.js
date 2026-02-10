@@ -10,19 +10,79 @@ let docenteActual = null;
 let jornadaActiva = null;
 
 /*********************************
+ * LOGIN ADMIN
+ *********************************/
+function mostrarLoginAdmin() {
+    Swal.fire({
+        title: 'Acceso Administrativo',
+        html: `
+            <input type="text" id="adminUser" class="swal2-input" placeholder="Usuario">
+            <input type="password" id="adminPass" class="swal2-input" placeholder="Contraseña">
+        `,
+        confirmButtonText: 'Ingresar',
+        showCancelButton: true,
+        cancelButtonText: 'Cancelar',
+        focusConfirm: false,
+        preConfirm: () => {
+            const usuario = Swal.getPopup().querySelector('#adminUser').value;
+            const password = Swal.getPopup().querySelector('#adminPass').value;
+            if (!usuario || !password) {
+                Swal.showValidationMessage('Por favor ingrese usuario y contraseña');
+            }
+            return { usuario, password };
+        }
+    }).then(async (result) => {
+        if (result.isConfirmed) {
+            const { usuario, password } = result.value;
+            
+            try {
+                const response = await fetch(`${API_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ usuario, password })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Bienvenido',
+                        text: 'Redirigiendo al panel...',
+                        timer: 1500,
+                        showConfirmButton: false
+                    }).then(() => {
+                        localStorage.setItem('adminToken', 'true');
+                        window.location.href = 'admin.html';
+                    });
+                } else {
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error de acceso',
+                        text: data.error || 'Credenciales incorrectas'
+                    });
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: 'No se pudo conectar con el servidor'
+                });
+            }
+        }
+    });
+}
+
+/*********************************
  * LOGIN POR DNI
  *********************************/
 async function verificarDNI() {
     const dni = document.getElementById("dniInput").value.trim();
 
-    if (dni === DNI_ADMIN) {
-        window.location.href = "admin.html";
-        return;
-    }
-
     try {
-        // Obtener docente desde la API
-        const response = await fetch(`${API_URL}/docentes/${dni}`);
+        // Obtener docente desde la API por DNI
+        const response = await fetch(`${API_URL}/docentes/dni/${dni}`);
         
         if (!response.ok) {
             mostrarMensaje("❌ DNI no registrado");
@@ -72,16 +132,16 @@ async function mostrarPanelDocente() {
     const minActual = ahora.getHours() * 60 + ahora.getMinutes();
 
     // Cursos pendientes para más tarde hoy (excluyendo curso activo)
-    const cursosPendientes = docenteActual.horario.filter(h => {
+    const cursosPendientes = (docenteActual.cursos || []).filter(h => {
         if (h.dia !== diaHoy) return false;
 
-        const inicio = convertirAMin(h.inicio);
+        const inicio = convertirAMin(h.hora_inicio);
 
         // si ya pasó su hora de inicio no es pendiente
         if (inicio <= minActual) return false;
 
         // si es el curso que está activo ahora, excluir
-        if (convertirAMin(h.inicio) <= minActual) return false;
+        if (convertirAMin(h.hora_inicio) <= minActual) return false;
 
         return true;
     });
@@ -100,7 +160,7 @@ async function mostrarPanelDocente() {
 
         cursosAhora.forEach(c => {
             const li = document.createElement("li");
-            li.innerText = `${c.curso} (${c.inicio} - ${c.fin})`;
+            li.innerText = `${c.nombre} (${c.hora_inicio} - ${c.hora_fin})`;
             lista.appendChild(li);
         });
 
@@ -114,7 +174,7 @@ async function mostrarPanelDocente() {
 
             cursosPendientes.forEach(c => {
                 const li = document.createElement("li");
-                li.innerText = `${c.curso} (${c.inicio} - ${c.fin})`;
+                li.innerText = `${c.nombre} (${c.hora_inicio} - ${c.hora_fin})`;
                 lista.appendChild(li);
             });
         }
@@ -139,7 +199,7 @@ async function mostrarPanelDocente() {
 
             cursosPendientes.forEach(c => {
                 const li = document.createElement("li");
-                li.innerText = `${c.curso} (${c.inicio} - ${c.fin})`;
+                li.innerText = `${c.nombre} (${c.hora_inicio} - ${c.hora_fin})`;
                 lista.appendChild(li);
             });
         } else {
@@ -155,7 +215,7 @@ async function mostrarPanelDocente() {
 
     cursos.forEach(c => {
         const li = document.createElement("li");
-        li.innerText = `${c.curso} (${c.inicio} - ${c.fin})`;
+        li.innerText = `${c.nombre} (${c.hora_inicio} - ${c.hora_fin})`;
         lista.appendChild(li);
     });
 
@@ -180,7 +240,7 @@ async function obtenerCursosDelMomento(dia, ahora) {
             // Convertir formato de BD al formato esperado
             historial = asistencias.map(a => ({
                 fecha: a.fecha,
-                nombre: a.curso
+                nombre: a.curso_nombre
             }));
         }
     } catch (error) {
@@ -189,20 +249,20 @@ async function obtenerCursosDelMomento(dia, ahora) {
 
     console.log("Este es historial: ", {historial});
 
-    const cursosDia = docenteActual.horario
+    const cursosDia = (docenteActual.cursos || [])
         .filter(h => h.dia === dia)
-        .sort((a,b)=> convertirAMin(a.inicio) - convertirAMin(b.inicio));
+        .sort((a,b)=> convertirAMin(a.hora_inicio) - convertirAMin(b.hora_inicio));
 
     console.log("Estos son cursosDia: ", {cursosDia});
 
     for (let h of cursosDia) {
 
-        const inicio = convertirAMin(h.inicio);
-        const fin = convertirAMin(h.fin);
+        const inicio = convertirAMin(h.hora_inicio);
+        const fin = convertirAMin(h.hora_fin);
 
         // Si ya fue registrado hoy → ignorar
         const yaHecho = historial.some(r =>
-            r.fecha === hoy && r.nombre === h.curso
+            r.fecha === hoy && r.nombre === h.nombre
         );
         if (yaHecho) continue;
 
@@ -276,10 +336,10 @@ async function marcarEntrada() {
         const asistencias = await asistenciasResponse.json();
         
         const hoy = new Date().toLocaleDateString();
-        const cursoActual = cursos[0].curso;
+        const cursoActual = cursos[0].nombre;
 
         const yaRegistrado = asistencias.some(a =>
-            a.fecha === hoy && a.curso === cursoActual
+            a.fecha === hoy && a.curso_nombre === cursoActual
         );
 
         if (yaRegistrado) {
@@ -295,7 +355,7 @@ async function marcarEntrada() {
         console.error('Error al verificar asistencias:', error);
     }
 
-    const inicioProg = convertirAMin(cursos[0].inicio);
+    const inicioProg = convertirAMin(cursos[0].hora_inicio);
     const minActual = ahora.getHours()*60 + ahora.getMinutes();
     const minutosTarde = minActual - inicioProg;
 
@@ -315,7 +375,7 @@ async function marcarEntrada() {
 
     // Si marcó antes o justo a tiempo → guardar hora oficial
     if (minActual <= inicioProg) {
-        horaEntradaGuardar = cursos[0].inicio;
+        horaEntradaGuardar = cursos[0].hora_inicio;
     } else {
         // Si llegó tarde leve → guardar hora real
         horaEntradaGuardar = formatearHora(ahora);
@@ -391,9 +451,9 @@ async function marcarSalida() {
 
         let minSalidaReal = convertirAMin(horaSalidaReal);
 
-        const todosCursosDia = docenteActual.horario
+        const todosCursosDia = (docenteActual.cursos || [])
             .filter(h => h.dia === jornada.dia)
-            .sort((a,b)=> convertirAMin(a.inicio)-convertirAMin(b.inicio));
+            .sort((a,b)=> convertirAMin(a.hora_inicio)-convertirAMin(b.hora_inicio));
 
         // construir bloque continuo desde el curso donde marcó entrada
         let cursosDia = [];
@@ -401,8 +461,8 @@ async function marcarSalida() {
 
         for (let i = 0; i < todosCursosDia.length; i++) {
 
-            const inicioCurso = convertirAMin(todosCursosDia[i].inicio);
-            const finCurso = convertirAMin(todosCursosDia[i].fin);
+            const inicioCurso = convertirAMin(todosCursosDia[i].hora_inicio);
+            const finCurso = convertirAMin(todosCursosDia[i].hora_fin);
 
             // encontrar curso donde empezó la jornada
             if (inicioJornada >= inicioCurso && inicioJornada < finCurso) {
@@ -420,8 +480,8 @@ async function marcarSalida() {
                 // añadir cursos siguientes si son continuos
                 for (let j = i+1; j < todosCursosDia.length; j++) {
 
-                    const inicioSig = convertirAMin(todosCursosDia[j].inicio);
-                    const finAnterior = convertirAMin(todosCursosDia[j-1].fin);
+                    const inicioSig = convertirAMin(todosCursosDia[j].hora_inicio);
+                    const finAnterior = convertirAMin(todosCursosDia[j-1].hora_fin);
                     const separacion = inicioSig - finAnterior;
 
                     if (separacion <= CORTE_JORNADA_MIN) {
@@ -445,7 +505,7 @@ async function marcarSalida() {
         }
 
         // Último curso del bloque continuo
-        const finProg = convertirAMin(cursosDia[cursosDia.length-1].fin);
+const finProg = convertirAMin(cursosDia[cursosDia.length-1].hora_fin);
 
         // Diferencia salida
         const minutosDespues = minSalidaReal - finProg;
@@ -466,7 +526,7 @@ async function marcarSalida() {
 
         // Si marca después dentro tolerancia → guardar hora oficial
         if (minutosDespues >= 0) {
-            horaSalidaGuardar = cursosDia[cursosDia.length-1].fin;
+            horaSalidaGuardar = cursosDia[cursosDia.length-1].hora_fin;
         } else {
             // Si sale antes → guardar hora real
             horaSalidaGuardar = horaSalidaReal;
@@ -489,7 +549,7 @@ async function marcarSalida() {
             } 
             // Cursos siguientes → usan su hora programada de inicio
             else {
-                entradaCurso = curso.inicio;
+                entradaCurso = curso.hora_inicio;
             }
 
             // Último curso → usa hora de salida guardada
@@ -498,7 +558,7 @@ async function marcarSalida() {
             } 
             // Cursos intermedios → usan su hora programada de fin
             else {
-                salidaCurso = curso.fin;
+                salidaCurso = curso.hora_fin;
             }
 
             // Observaciones
@@ -517,13 +577,13 @@ async function marcarSalida() {
             asistencias.push({
                 docente_dni: docenteActual.dni,
                 fecha: jornada.fecha,
-                curso: curso.curso,
+                curso_id: curso.id,
                 entrada: entradaCurso,
                 salida: salidaCurso,
                 horas: ((convertirAMin(salidaCurso) - convertirAMin(entradaCurso)) / 60).toFixed(2),
                 observaciones: observacionesNumero,
-                entrada_prog: curso.inicio,
-                salida_prog: curso.fin
+                entrada_prog: curso.hora_inicio,
+                salida_prog: curso.hora_fin
             });
         });
 
